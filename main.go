@@ -9,7 +9,7 @@ import (
 	redis "github.com/redis/go-redis/v9"
 )
 
-var limite int = 2
+var limite int = 5
 
 func main() {
 
@@ -21,13 +21,16 @@ func main() {
 }
 
 func Handler(w http.ResponseWriter, r *http.Request) {
-	ip := r.RemoteAddr
 	client := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",
 		DB:       0,
 	})
 	defer client.Close()
+
+	identifier := r.RemoteAddr
+	ip := fmt.Sprintf("ratelimit:%s", identifier)
+
 	ctx := context.Background()
 
 	// Incrementar a contagem de requisições por IP
@@ -38,25 +41,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Definir um tempo de expiração para o hash (1 segundo)
-	_, err = client.Expire(ctx, "requests", time.Duration(limite)*time.Second).Result()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	// Obter a contagem atual de requisições para o IP
 	count, err := client.HGet(ctx, "requests", ip).Int()
 
-	if err != nil && err != redis.Nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Verificar se a contagem excedeu o limite de 10 requisições por segundo
-	if count > 10 {
-		http.Error(w, "you have reached the maximum number of requests or actions allowed within a certain time frame", http.StatusTooManyRequests)
-		return
+	if err == redis.Nil {
+		client.Set(ctx, ip, 1, 1*time.Second)
+	} else if err != nil {
+		http.Error(w, "Redis Error", http.StatusInternalServerError)
+	} else if count >= limite {
+		// Limite Excedido
+		http.Error(w, "Too many requests - Limite Excedido", http.StatusTooManyRequests)
+	} else {
+		// Incrementando ip
+		client.Incr(ctx, ip)
 	}
 
 	// Processar a requisição normalmente
